@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Estratégico CX (V10.3 - Múltiplas Visões)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0; background-color: #1a1a1a; color: #f0f0f0;
+        }
+        /* Container principal */
+        .container { max-width: 1400px; margin: 20px auto; padding: 20px; }
+        header { border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 20px; }
+        h1, h2, h3 { color: #4a90e2; }
+        
+        /* Grade 2x2 para os 4 filtros */
+        .view-controls {
+            display: grid; 
+            grid-template-columns: 1fr 1fr; /* Grade 2x2 */
+            gap: 20px; margin-bottom: 20px;
+            padding: 15px; background: #2a2a2a; border-radius: 8px;
+        }
+
+        /* Em telas menores (móveis), força uma coluna única */
+        @media (max-width: 768px) {
+          .view-controls {
+              grid-template-columns: 1fr;
+          }
+          .charts-grid {
+              grid-template-columns: 1fr !important; /* Força 1 coluna no gráfico */
+          }
+          .audit-grid {
+              grid-template-columns: 1fr !important; /* Força 1 coluna nos detalhes */
+          }
+        }
+        
+        label { font-weight: 600; display: block; margin-bottom: 5px; color: #bbb; }
+        select {
+            width: 100%; padding: 12px; border-radius: 5px; border: 1px solid #555;
+            font-size: 16px; background-color: #333; color: #f0f0f0;
+        }
+        .view-container { display: none; }
+        #view-global { border-top: 1px solid #333; padding-top: 20px; }
+        .metricas-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;
+        }
+        .metrica-card {
+            background: #2a2a2a; padding: 20px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3); text-align: center;
+        }
+        .metrica-card h3 { margin: 0 0 10px 0; font-size: 1.1em; color: #8cb4e1; border-bottom: 1px solid #444; padding-bottom: 8px; }
+        .metrica-card .valor { font-size: 2.5em; font-weight: 700; color: #fff; }
+        .metrica-card .sub { font-size: 0.9em; color: #999; }
+        .charts-grid {
+            display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-top: 30px;
+        }
+        /* NOVO: Estilo para grids de 1 coluna */
+        .charts-grid-single {
+             display: grid; grid-template-columns: 1fr; gap: 20px; margin-top: 30px;
+        }
+        
+        .chart-container {
+            background: #2a2a2a; padding: 20px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .chart-container h3 { text-align: center; margin-top: 0; }
+        #view-especifica {
+            background: #2a2a2a; padding: 25px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3); margin-top: 20px;
+        }
+        .audit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+        .audit-section h3 { border-bottom: 1px solid #4a90e2; padding-bottom: 5px; }
+        .audit-section p {
+            margin: 10px 0; padding-bottom: 10px; border-bottom: 1px solid #333; line-height: 1.6;
+        }
+        .audit-section p strong { color: #8cb4e1; min-width: 150px; display: inline-block; }
+        .audit-section p span { color: #f0f0f0; }
+        .tooltip {
+            cursor: help; border: 1px solid #777; border-radius: 50%; width: 16px; height: 16px;
+            display: inline-block; text-align: center; font-size: 12px; line-height: 16px;
+            color: #777; margin-left: 8px; position: relative; top: -1px;
+        }
+        .tooltip:hover { background: #777; color: #1a1a1a; }
+        .loading { text-align: center; font-size: 1.2em; color: #777; padding: 40px 0; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Dashboard Estratégico CX (V10.3)</h1>
+        </header>
+
+            <div class="view-controls" id="controles-principais">
+            <div>
+                <label for="grupo-select">1. Selecione o Grupo:</label>
+                <select id="grupo-select" onchange="atualizarFiltrosGrupo()">
+                    <option value="global" selected>Visão Global (Todos Grupos)</option>
+                </select>
+            </div>
+            <div>
+                <label for="produto-select">2. Produto (Filtro Opcional):</label>
+                <select id="produto-select" onchange="atualizarFiltrosProduto()" disabled>
+                    <option value="global">Todos Produtos (Grupo)</option>
+                </select>
+            </div>
+            <div>
+                <label for="aba-select">3. Selecione o Funcionário (Aba):</label>
+                <select id="aba-select" onchange="carregarAuditorias()" disabled>
+                    <option value="global">Todos Funcionários (Grupo)</option>
+                </select>
+            </div>
+            <div>
+                <label for="audit-select">4. Selecione a Auditoria:</label>
+                <select id="audit-select" onchange="renderizarDashboard()" disabled>
+                    <option value="global">Visão Geral (Funcionário)</option>
+                </select>
+            </div>
+        </div>
+                
+        <div id="loading" class="loading">Carregando dados...</div>
+
+        <div id="view-global" class="view-container">
+            <h2 id="global-titulo">Visão Global</h2>
+            <div class="metricas-grid" id="global-metricas-grid"></div>
+            
+            <div class="charts-grid" id="charts-grid"> 
+                <div class="chart-container">
+                    <h3>Tipo de Chamada</h3>
+                    <canvas id="chart-global-tipo"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>Desempenho por Pilar de CX</h3>
+                    <canvas id="chart-global-pilares"></canvas>
+                </div>
+            </div>
+
+            <div class="charts-grid-single" id="charts-grid-tendencia">
+                <div class="chart-container">
+                    <h3>Evolução da Conformidade (Mensal)</h3>
+                    <canvas id="chart-global-tendencia"></canvas>
+                </div>
+            </div>
+
+            <div class="charts-grid-single" id="charts-grid-ranking" style="display: none;">
+                <div class="chart-container">
+                    <h3>Ranking de Desempenho (Agentes do Grupo)</h3>
+                    <canvas id="chart-global-ranking"></canvas>
+                </div>
+            </div>
+
+            <div class="charts-grid-single" id="charts-grid-correlacao" style="display: none;">
+                <div class="chart-container">
+                    <h3>Correlação: Duração (seg) vs Conformidade (%)</h3>
+                    <canvas id="chart-global-correlacao"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="view-especifica" class="view-container">
+            <h2 id="especifica-titulo">Detalhes da Auditoria (ID: 1)</h2>
+            <div class="audit-grid">
+                <div class="audit-section" id="especifica-cabecalho"></div>
+                <div class="audit-section" id="especifica-perguntas"></div>
+            </div>
+            <div class="audit-section" id="especifica-pilares"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURAÇÃO ---
+        const WORKER_URL = "https://super-union-6352.sensedata-dash.workers.dev";
+        const VALOR_CONFORME = "🟢 Conforme"; 
+        
+        const PILARES_MAP = [
+            { id_nome: "pilar1_nome", id_conf: "pilar1_conf", id_obs: "pilar1_obs", id_leg: "legenda1" },
+            { id_nome: "pilar2_nome", id_conf: "pilar2_conf", id_obs: "pilar2_obs", id_leg: "legenda2" },
+            { id_nome: "pilar3_nome", id_conf: "pilar3_conf", id_obs: "pilar3_obs", id_leg: "legenda3" },
+            { id_nome: "pilar4_nome", id_conf: "pilar4_conf", id_obs: "pilar4_obs", id_leg: "legenda4" },
+            { id_nome: "pilar5_nome", id_conf: "pilar5_conf", id_obs: "pilar5_obs", id_leg: "legenda5" },
+            { id_nome: "pilar6_nome", id_conf: "pilar6_conf", id_obs: "pilar6_obs", id_leg: "legenda6" }
+        ];
+        // --- FIM DA CONFIGURAÇÃO ---
+
+        let state = {
+            todasAuditorias: [], 
+            mapaGrupos: new Map(), // Mapa: { grupo: ["Aba1", "Aba2"] }
+            grupos: [] // Lista de Grupos (ex: Solidworks, Hexagon)
+        };
+        
+        let chartInstances = {};
+        const $ = (id) => document.getElementById(id);
+
+        // --- 1. CARREGAMENTO GLOBAL (AO INICIAR) ---
+        async function carregarTudo() {
+            $("loading").innerText = "Carregando dados de todas as auditorias...";
+            
+            try {
+                const cacheBust = `?cb=${new Date().getTime()}`;
+
+                const abasResponse = await fetch(`${WORKER_URL}/get-abas${cacheBust}`);
+                if (!abasResponse.ok) throw new Error("Falha ao carregar lista de abas");
+                const abasGrupos = await abasResponse.json(); 
+
+                abasGrupos.forEach(item => {
+                    const grupoNormalizado = normalizeText(item.produto); 
+                    if (!state.mapaGrupos.has(grupoNormalizado)) {
+                        state.mapaGrupos.set(grupoNormalizado, []);
+                    }
+                    state.mapaGrupos.get(grupoNormalizado).push(item.aba);
+                });
+
+                const fetchPromises = abasGrupos.map(item => 
+                    fetch(`${WORKER_URL}/get-audits?produto=${item.produto}&aba=${item.aba}&cb=${new Date().getTime()}`)
+                        .then(res => res.json())
+                );
+                
+                const resultadosPorAba = await Promise.all(fetchPromises);
+                state.todasAuditorias = resultadosPorAba.flat();
+                
+                state.todasAuditorias.forEach(audit => {
+                    audit.produto = normalizeText(audit.produto); 
+                    audit.produto_interno = normalizeText(audit.produto_interno); 
+                });
+                
+                populateGrupoFilter();
+                renderizarDashboard();
+                
+                $("loading").style.display = "none";
+                $("view-global").style.display = "block"; 
+
+            } catch (error) {
+                console.error(error);
+                $("loading").innerText = "Erro fatal ao carregar dados globais. Verifique o Worker.";
+            }
+        }
+
+        // --- 2. FUNÇÕES DE FILTRO E ROTEAMENTO (Dropdowns) ---
+        
+        // (Dropdown 1) Popula Grupos
+        function populateGrupoFilter() {
+            state.grupos = [...state.mapaGrupos.keys()].sort();
+            const selectGrupo = $("grupo-select");
+            selectGrupo.innerHTML = '<option value="global">Visão Global (Todos Grupos)</option>';
+            
+            state.grupos.forEach(grupo => {
+                const nome = (grupo === null) ? "(Não Preenchido)" : grupo;
+                const valor = (grupo === null) ? "null" : grupo;
+                selectGrupo.innerHTML += `<option value="${valor}">${nome}</option>`;
+            });
+        }
+        
+        // (Chamado pelo Dropdown 1)
+        // Popula D2 (Produtos) E D3 (Funcionários)
+        function atualizarFiltrosGrupo() {
+            const grupo = $("grupo-select").value;
+            populateProdutos(grupo);
+            populateFuncionarios(grupo, "global"); // Popula funcionários baseado APENAS no grupo
+            
+            carregarAuditorias(); // Apenas reseta o D4
+        }
+        
+        // (Chamado pelo Dropdown 2)
+        // RE-FILTRA D3 (Funcionários)
+        function atualizarFiltrosProduto() {
+            const grupo = $("grupo-select").value;
+            const produto = $("produto-select").value;
+            populateFuncionarios(grupo, produto); // RE-popula funcionários com o filtro do produto
+            
+            carregarAuditorias(); // Apenas reseta o D4
+        }
+        
+        // (Helper) Popula D2 - Produtos
+        function populateProdutos(grupo) {
+            const selectProduto = $("produto-select");
+            
+            if (grupo === "global") {
+                selectProduto.innerHTML = '<option value="global">Todos Produtos (Grupo)</option>';
+                selectProduto.disabled = true;
+            } else {
+                selectProduto.innerHTML = '<option value="global">Todos Produtos (Grupo)</option>';
+                const grupoFiltrar = (grupo === "null") ? null : grupo;
+                const auditsDoGrupo = state.todasAuditorias.filter(a => a.produto === grupoFiltrar);
+                const produtosInternos = [...new Set(auditsDoGrupo.map(a => a.produto_interno))].sort();
+                
+                produtosInternos.forEach(produto => {
+                    const nome = (produto === null) ? "(Não Preenchido/N/A)" : produto;
+                    const valor = (produto === null) ? "null" : produto;
+                    selectProduto.innerHTML += `<option value="${valor}">${nome}</option>`;
+                });
+                selectProduto.disabled = false;
+            }
+        }
+        
+        // (Helper) Popula D3 - Funcionários
+        function populateFuncionarios(grupo, produto) {
+            const selectAba = $("aba-select");
+
+            if (grupo === "global") {
+                selectAba.innerHTML = '<option value="global">Todos Funcionários (Grupo)</option>';
+                selectAba.disabled = true;
+                return; // Sai da função
+            }
+            
+            // Se um grupo é selecionado, habilita e popula
+            selectAba.disabled = false;
+            const grupoFiltrar = (grupo === "null") ? null : grupo;
+            let auditsFiltradas = state.todasAuditorias.filter(a => a.produto === grupoFiltrar);
+
+            // Se um produto TAMBÉM for selecionado (filtro opcional)
+            if (produto !== "global") {
+                const produtoFiltrar = (produto === "null") ? null : produto;
+                auditsFiltradas = auditsFiltradas.filter(a => a.produto_interno === produtoFiltrar);
+                selectAba.innerHTML = '<option value="global">Todos Funcionários (Produto)</option>';
+            } else {
+                selectAba.innerHTML = '<option value="global">Todos Funcionários (Grupo)</option>';
+            }
+
+            const abas = [...new Set(auditsFiltradas.map(a => a.aba))].sort();
+            abas.forEach(aba => {
+                selectAba.innerHTML += `<option value="${aba}">${aba}</option>`;
+            });
+        }
+
+        // (Chamado pelo Dropdown 3)
+        // Popula D4 - Auditorias
+        function carregarAuditorias() {
+            const grupo = $("grupo-select").value;
+            const produto = $("produto-select").value;
+            const aba = $("aba-select").value;
+            const selectAudit = $("audit-select");
+
+            if (aba === "global") {
+                selectAudit.innerHTML = '<option value="global">Visão Geral</option>';
+                selectAudit.disabled = true;
+            } else {
+                selectAudit.innerHTML = '<option value="global">Visão Geral (Funcionário)</option>';
+                selectAudit.disabled = false;
+                
+                const grupoFiltrar = (grupo === "null") ? null : grupo;
+                let auditsDoFuncionario = state.todasAuditorias.filter(a => 
+                    a.produto === grupoFiltrar && 
+                    a.aba === aba
+                );
+                
+                // Filtra pelo produto se ele estiver selecionado
+                if (produto !== "global") {
+                    const produtoFiltrar = (produto === "null") ? null : produto;
+                    auditsDoFuncionario = auditsDoFuncionario.filter(a => a.produto_interno === produtoFiltrar);
+                }
+                
+                auditsDoFuncionario.forEach(audit => {
+                    const titulo = `ID ${audit.id} (Téc: ${audit.tecnico || "N/A"})`;
+                    selectAudit.innerHTML += `<option value="${audit.id}">${titulo}</option>`;
+                });
+            }
+            
+            // Renderiza o dashboard com a seleção atual
+            renderizarDashboard();
+        }
+
+
+        // ROTEADOR PRINCIPAL - Decide o que mostrar
+        function renderizarDashboard() {
+            const grupo = $("grupo-select").value;
+            const produto = $("produto-select").value;
+            const aba = $("aba-select").value;
+            const auditId = $("audit-select").value;
+            
+            destroyCharts();
+            $("view-global").style.display = "none";
+            $("view-especifica").style.display = "none";
+            
+            let dadosFiltrados = state.todasAuditorias;
+            const grupoFiltrar = (grupo === "null") ? null : grupo;
+            const produtoFiltrar = (produto === "null") ? null : produto;
+            
+            if (auditId !== "global") {
+                // NÍVEL 4: Visão Específica (ID)
+                const audit = state.todasAuditorias.find(a => 
+                    a.id == auditId && 
+                    a.aba === aba && 
+                    (produto === "global" || a.produto_interno === produtoFiltrar) &&
+                    a.produto === grupoFiltrar
+                );
+                $("view-especifica").style.display = "block";
+                renderizarVisaoEspecificaDetalhes(audit);
+                return; // Sai da função
+            } 
+            
+            // Se não for visão específica, é visão GERAL
+            $("view-global").style.display = "block";
+            
+            if (aba !== "global") {
+                // NÍVEL 3: Visão por Funcionário
+                dadosFiltrados = state.todasAuditorias.filter(a => a.produto === grupoFiltrar && a.aba === aba);
+                if (produto !== "global") {
+                    dadosFiltrados = dadosFiltrados.filter(a => a.produto_interno === produtoFiltrar);
+                }
+                $("global-titulo").innerText = `Visão (Funcionário: ${aba} | ${grupo})`;
+            
+            } else if (produto !== "global") {
+                // NÍVEL 2: Visão por Produto
+                dadosFiltrados = state.todasAuditorias.filter(a => 
+                    a.produto === grupoFiltrar && 
+                    a.produto_interno === produtoFiltrar
+                );
+                $("global-titulo").innerText = `Visão (Produto: ${produto} | ${grupo})`;
+            
+            } else if (grupo !== "global") {
+                // NÍVEL 1: Visão por Grupo
+                dadosFiltrados = state.todasAuditorias.filter(a => a.produto === grupoFiltrar);
+                $("global-titulo").innerText = `Visão Geral (Grupo: ${grupo})`;
+                
+            } else {
+                // NÍVEL 0: Visão Global (Todos Grupos)
+                dadosFiltrados = state.todasAuditorias;
+                $("global-titulo").innerText = `Visão Global (Todos Grupos)`;
+           }
+            
+            // ATUALIZADO: Passa os filtros 'grupo' e 'aba' para a função de renderização
+            renderizarVisaoGeral(dadosFiltrados, grupo, aba);
+        }
+
+        // --- 4. RENDERIZAR VISÃO GERAL (KPIs e Gráficos) ---
+        // ATUALIZADO: Recebe 'grupoSelecionado' e 'abaSelecionada'
+        function renderizarVisaoGeral(audits, grupoSelecionado, abaSelecionada) { 
+            const grid = $("global-metricas-grid");
+            const chartGrid = $("charts-grid");
+            
+            destroyCharts(); // Garante que todos os gráficos (incluindo os novos) sejam limpos
+
+            if (audits.length === 0) {
+                grid.innerHTML = "<p>Nenhuma auditoria encontrada para os filtros selecionados.</p>";
+                chartGrid.style.display = "none"; 
+                // Esconde os novos gráficos também
+                $("charts-grid-tendencia").style.display = "none";
+                $("charts-grid-ranking").style.display = "none";
+                $("charts-grid-correlacao").style.display = "none";
+                return;
+            }
+
+            chartGrid.style.display = "grid"; 
+            $("charts-grid-tendencia").style.display = "grid"; // Mostra o grid de tendência
+            // Os outros grids (ranking, correlação) são controlados por suas próprias funções
+
+            // --- Cálculos Estratégicos ---
+            let totalPilaresAvaliados = 0, totalPilaresConformes = 0, totalDuracaoSegundos = 0,
+                totalTransferencias = 0, chamadasAtivo = 0, chamadasReceptivo = 0;
+            let pilarStats = {};
+            PILARES_MAP.forEach(pilar => pilarStats[pilar.id_conf] = { total: 0, conforme: 0 });
+
+            audits.forEach(audit => {
+                totalDuracaoSegundos += parseDuration(audit.duracao);
+                if (audit.transferencia && (audit.transferencia.toLowerCase() === "sim" || audit.transferencia.toLowerCase() === "s")) totalTransferencias++;
+                if (audit.contato === 'Ativo') chamadasAtivo++;
+                if (audit.contato === 'Receptivo') chamadasReceptivo++;
+                
+                PILARES_MAP.forEach(pilar => { 
+                    const valorConf = audit[pilar.id_conf]; 
+                    if (valorConf !== null) {
+                        pilarStats[pilar.id_conf].total++;
+                        totalPilaresAvaliados++;
+                        if (valorConf === VALOR_CONFORME) {
+                            pilarStats[pilar.id_conf].conforme++;
+                            totalPilaresConformes++;
+                        }
+                    }
+                });
+            });
+
+            // --- Renderizar os 4 KPIs ---
+            let html = "";
+            const totalAuditorias = audits.length;
+
+            html += `<div class="metrica-card"><h3>Total de Auditorias</h3><div class="valor">${totalAuditorias}</div></div>`;
+            
+            const percGeral = (totalPilaresAvaliados === 0) ? 0 : (totalPilaresConformes / totalPilaresAvaliados) * 100;
+            html += `<div class="metrica-card"><h3>Conformidade Geral</h3><div class="valor">${percGeral.toFixed(0)}%</div><div class="sub">${totalPilaresConformes} de ${totalPilaresAvaliados}</div></div>`;
+            
+            const avgSegundos = (totalAuditorias === 0) ? 0 : (totalDuracaoSegundos / totalAuditorias);
+            const tmlString = new Date(avgSegundos * 1000).toISOString().substr(14, 5);
+            html += `<div class="metrica-card"><h3>Tempo Médio (TML)</h3><div class="valor">${tmlString}</div></div>`;
+
+            const percTransfer = (totalAuditorias === 0) ? 0 : (totalTransferencias / totalAuditorias) * 100;
+            html += `<div class="metrica-card"><h3>Transferências</h3><div class="valor">${percTransfer.toFixed(0)}%</div><div class="sub">${totalTransferencias} de ${totalAuditorias}</div></div>`;
+
+            grid.innerHTML = html;
+            
+            // --- Renderizar os Gráficos Globais (Originais) ---
+            renderChart('chart-global-tipo', 'doughnut', {
+                labels: ['Receptivo', 'Ativo'],
+                datasets: [{ data: [chamadasReceptivo, chamadasAtivo], backgroundColor: ['#4a90e2', '#50e3c2'], borderColor: '#2a2a2a' }]
+            }, { responsive: true, maintainAspectRatio: false, legend: { labels: { fontColor: '#f0f0f0' }} });
+
+            const firstAudit = audits[0] || {}; 
+            const pilarLabels = PILARES_MAP.map(pilar => firstAudit[pilar.id_nome] || pilar.id_conf);
+           const pilarData = PILARES_MAP.map(pilar => { 
+                const stats = pilarStats[pilar.id_conf];
+                return (stats.total === 0) ? 0 : (stats.conforme / stats.total) * 100;
+            });
+
+            renderChart('chart-global-pilares', 'horizontalBar', {
+                labels: pilarLabels,
+                datasets: [{ label: 'Conformidade (%)', data: pilarData, backgroundColor: '#4a90e2' }]
+            }, {
+                responsive: true, legend: { display: false },
+                scales: {
+                    xAxes: [{ ticks: { beginAtZero: true, max: 100, fontColor: '#f0f0f0' }, gridLines: { color: '#444' } }],
+                    yAxes: [{ ticks: { fontColor: '#f0f0f0' }, gridLines: { display: false } }]
+                }
+            });
+
+            // --- NOVO: CHAMADA PARA OS NOVOS GRÁFICOS ---
+            renderizarGraficoTendencia(audits);
+            renderizarGraficoRanking(audits, grupoSelecionado, abaSelecionada);
+            renderizarGraficoCorrelacao(audits);
+        }
+
+        // --- 5. RENDERIZAR VISÃO ESPECÍFICA (Drill-down) ---
+        function renderizarVisaoEspecificaDetalhes(audit) {
+            if (!audit) {
+                $("view-especifica").innerHTML = "<h2>Erro: Auditoria não encontrada.</h2>";
+                return;
+            }
+            $("especifica-titulo").innerText = `Detalhes da Auditoria (ID: ${audit.id})`;
+            
+            $("especifica-cabecalho").innerHTML = `
+                <h3>Cabeçalho da Auditoria</h3>
+                <p><strong>Técnico:</strong> <span>${audit.tecnico || "N/A"}</span></p>
+                <p><strong>Auditor:</strong> <span>${audit.responsavel || "N/A"}</span></p>
+                <p><strong>Data Auditoria:</strong> <span>${audit.data_auditoria || "N/A"}</span></p>
+                <p><strong>ID Ligação:</strong> <span>${audit.identificacao || "N/A"}</span></p>
+                <p><strong>Data Ligação:</strong> <span>${audit.data_hora || "N/A"}</span></p>
+                <p><strong>Duração:</strong> <span>${audit.duracao || "N/A"}</span></p>
+                <p><strong>Cliente/Código:</strong> <span>${audit.cliente_codigo || "N/A"}</span></p>
+                <p><strong>Contato:</strong> <span>${audit.contato || "N/A"}</span></p>
+                <p><strong>Grupo:</strong> <span>${audit.produto || "N/A"}</span></p>
+                <p><strong>Produto:</strong> <span>${audit.produto_interno || "N/A"}</span></p>
+                <p><strong>Motivo:</strong> <span>${audit.motivo || "N/A"}</span></p>
+                <p><strong>Transferência:</strong> <span>${audit.transferencia || "N/A"}</span></p>
+            `;
+            $("especifica-perguntas").innerHTML = `
+                <h3>Perguntas Iniciais</h3>
+                <p><strong>Apresentou?:</strong> <span>${audit.q1_apresentou || "N/A"}</span></p>
+                <p><strong>Avisou Pausa?:</strong> <span>${audit.q2_avisou || "N/A"}</span></p>
+                <p><strong>Verificou?:</strong> <span>${audit.q3_verificou || "N/A"}</span></p>
+            `;
+            let pilaresHtml = `<h3>Pilares de CX</h3>`;
+            PILARES_MAP.forEach(pilar => {
+                const pilarNome = audit[pilar.id_nome] || "(Pilar não nomeado)";
+               const pilarConf = audit[pilar.id_conf];
+                const pilarObs = audit[pilar.id_obs];
+                const legendaTexto = audit[pilar.id_leg] || "Legenda não encontrada.";
+                
+                pilaresHtml += `
+                    <p>
+                        <strong>
+                            ${pilarNome}
+                            <span class="tooltip" title="${legendaTexto}">?</span>
+                        </strong> 
+                        <span>${pilarConf || "N/A"}</span>
+                        <br>
+                        <span style="color: #999; font-style: italic;">Obs: ${pilarObs || "Sem observações."}</span>
+                    </p>
+                `;
+            });
+            $("especifica-pilares").innerHTML = pilaresHtml;
+       }
+
+
+        // --- 6. FUNÇÕES AUXILIARES E NOVOS GRÁFICOS ---
+
+        // --- 6.1 FUNÇÕES AUXILIARES (EXISTENTES) ---
+        function normalizeText(str) {
+            if (!str || typeof str !== 'string' || str.trim() === '') return null;
+            return str.trim().toLowerCase().replace(/\b\w/g, char => char.toUpperCase());
+        }
+
+        function parseDuration(durationStr) {
+            if (!durationStr || typeof durationStr !== 'string') return 0;
+           const match = durationStr.match(/(\d+):(\d+)/);
+            if (match && match[1] && match[2]) {
+                const minutes = parseInt(match[1], 10);
+                const seconds = parseInt(match[2], 10);
+                return (minutes * 60) + seconds;
+            }
+            return 0;
+        }
+
+        function renderChart(canvasId, type, data, options) {
+            if (chartInstances[canvasId]) {
+                chartInstances[canvasId].destroy();
+            }
+            const ctx = $(canvasId).getContext('2d');
+           chartInstances[canvasId] = new Chart(ctx, { type: type, data: data, options: options });
+        }
+
+        function destroyCharts() {
+            Object.keys(chartInstances).forEach(id => {
+                if (chartInstances[id]) {
+                    chartInstances[id].destroy();
+                   delete chartInstances[id];
+                }
+            });
+        }
+
+
+        // --- 6.2 NOVAS FUNÇÕES DE GRÁFICO (MELHORIAS) ---
+
+        /**
+         * [NOVO - 1] Renderiza a evolução da conformidade ao longo do tempo (Gráfico de Linha)
+         */
+        function renderizarGraficoTendencia(audits) {
+            const statsMensais = {}; // Ex: { "2023-10": { totalPilares: 0, conformes: 0 } }
+
+            audits.forEach(audit => {
+                if (!audit.data_auditoria) return; 
+                
+                let dataAudit;
+                try {
+                    // Tenta ajustar formato DD/MM/YYYY para YYYY-MM-DD (ISO)
+                    if (audit.data_auditoria.includes('/')) {
+                        const partes = audit.data_auditoria.split(' ')[0].split('/');
+                        if (partes.length === 3 && partes[2].length === 4) {
+                            // Assume formato DD/MM/YYYY
+                            dataAudit = new Date(`${partes[2]}-${partes[1]}-${partes[0]}T00:00:00`);
+                        } else {
+                            throw new Error('Formato de data inválido');
+                        }
+                    } else {
+                        dataAudit = new Date(audit.data_auditoria); // Assume formato ISO
+                    }
+                    if (isNaN(dataAudit.getTime())) throw new Error('Data inválida');
+
+                } catch (e) {
+                    console.warn("Data de auditoria inválida:", audit.data_auditoria, audit.id);
+                    return; // Pula data inválida
+                }
+
+                const mesKey = `${dataAudit.getFullYear()}-${String(dataAudit.getMonth() + 1).padStart(2, '0')}`;
+
+                if (!statsMensais[mesKey]) {
+                    statsMensais[mesKey] = { totalPilares: 0, conformes: 0 };
+                }
+
+                PILARES_MAP.forEach(pilar => {
+                    const valorConf = audit[pilar.id_conf];
+                    if (valorConf !== null) { 
+                        statsMensais[mesKey].totalPilares++;
+                        if (valorConf === VALOR_CONFORME) {
+                            statsMensais[mesKey].conformes++;
+                        }
+                    }
+                });
+            });
+
+            // Preparar dados para o Chart.js
+            const labels = Object.keys(statsMensais).sort();
+            const data = labels.map(key => {
+                const stats = statsMensais[key];
+                return (stats.totalPilares === 0) ? 0 : (stats.conformes / stats.totalPilares) * 100;
+            });
+
+            // Limitar aos últimos 12 meses para melhor visualização
+            const labelsFinais = labels.slice(-12);
+            const dataFinal = data.slice(-12);
+            
+            // Renderizar o gráfico
+            renderChart('chart-global-tendencia', 'line', {
+                labels: labelsFinais,
+                datasets: [{
+                    label: 'Conformidade Média (%)',
+                    data: dataFinal,
+                    borderColor: '#50e3c2',
+                    backgroundColor: 'rgba(80, 227, 194, 0.1)',
+                    fill: true,
+                    tension: 0.1
+                }]
+            }, {
+                responsive: true,
+                scales: {
+                    yAxes: [{ ticks: { beginAtZero: true, max: 100, fontColor: '#f0f0f0' }, gridLines: { color: '#444' } }],
+                    xAxes: [{ ticks: { fontColor: '#f0f0f0' }, gridLines: { display: false } }]
+                },
+                legend: { labels: { fontColor: '#f0f0f0' }}
+            });
+        }
+
+
+        /**
+         * [NOVO - 2] Renderiza o ranking de agentes (Gráfico de Barras)
+         */
+        function renderizarGraficoRanking(audits, grupoSelecionado, abaSelecionada) {
+            const container = $("charts-grid-ranking");
+
+            // Só mostra o ranking se estivermos na visão de um GRUPO (mas não de um funcionário)
+            if (grupoSelecionado === 'global' || abaSelecionada !== 'global') {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'grid'; // Mostra o container
+
+            const statsFuncionarios = new Map(); // Map<string, { totalPilares: 0, conformes: 0 }>
+            
+            audits.forEach(audit => {
+                const funcionario = audit.aba;
+                if (!statsFuncionarios.has(funcionario)) {
+                    statsFuncionarios.set(funcionario, { totalPilares: 0, conformes: 0 });
+                }
+                
+                const stats = statsFuncionarios.get(funcionario);
+                
+                PILARES_MAP.forEach(pilar => {
+                    const valorConf = audit[pilar.id_conf];
+                    if (valorConf !== null) {
+                        stats.totalPilares++;
+                        if (valorConf === VALOR_CONFORME) {
+                            stats.conformes++;
+                        }
+                    }
+                });
+            });
+
+            // Formatar para o gráfico
+            const rankingData = [];
+            statsFuncionarios.forEach((stats, funcionario) => {
+                const media = (stats.totalPilares === 0) ? 0 : (stats.conformes / stats.totalPilares) * 100;
+                rankingData.push({ nome: funcionario, media: media });
+            });
+
+            // Ordenar por média (do maior para o menor)
+            rankingData.sort((a, b) => b.media - a.media);
+
+            const labels = rankingData.map(d => d.nome);
+            const data = rankingData.map(d => d.media);
+
+            renderChart('chart-global-ranking', 'horizontalBar', {
+                labels: labels,
+                datasets: [{
+                    label: 'Conformidade Média (%)',
+                    data: data,
+                    backgroundColor: '#8cb4e1'
+                }]
+            }, {
+                responsive: true,
+                legend: { display: false },
+                scales: {
+                    xAxes: [{ ticks: { beginAtZero: true, max: 100, fontColor: '#f0f0f0' }, gridLines: { color: '#444' } }],
+                    yAxes: [{ ticks: { fontColor: '#f0f0f0' }, gridLines: { display: false } }]
+                }
+            });
+        }
+
+
+        /**
+         * [NOVO - 3] Renderiza a correlação entre Duração e Conformidade (Gráfico de Dispersão)
+         */
+        function renderizarGraficoCorrelacao(audits) {
+            const container = $("charts-grid-correlacao");
+
+            // Não mostrar se houver poucos dados para correlacionar
+            if (audits.length < 5) {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'grid';
+
+            const scatterData = [];
+
+            audits.forEach(audit => {
+                const duracao = parseDuration(audit.duracao);
+                if (duracao === 0) return; // Ignora auditorias sem duração
+
+                let totalPilares = 0;
+                let conformes = 0;
+                
+                PILARES_MAP.forEach(pilar => {
+                    const valorConf = audit[pilar.id_conf];
+                    if (valorConf !== null) {
+                        totalPilares++;
+                        if (valorConf === VALOR_CONFORME) {
+                            conformes++;
+                        }
+                    }
+                });
+
+                const conformidade = (totalPilares === 0) ? 0 : (conformes / totalPilares) * 100;
+                
+                scatterData.push({ x: duracao, y: conformidade });
+            });
+
+            renderChart('chart-global-correlacao', 'scatter', {
+                datasets: [{
+                    label: 'Auditoria',
+                    data: scatterData,
+                    backgroundColor: 'rgba(74, 144, 226, 0.7)'
+                }]
+            }, {
+                responsive: true,
+                legend: { display: false },
+                scales: {
+                    xAxes: [{
+                        type: 'linear',
+                        position: 'bottom',
+                        ticks: { fontColor: '#f0f0f0' },
+                        gridLines: { color: '#444' },
+                        scaleLabel: {
+                            display: true,
+                            labelString: 'Duração (segundos)',
+                            fontColor: '#bbb'
+                        }
+                    }],
+                    yAxes: [{
+                        ticks: { beginAtZero: true, max: 100, fontColor: '#f0f0f0' },
+                        gridLines: { color: '#444' },
+                         scaleLabel: {
+                            display: true,
+                            labelString: 'Conformidade (%)',
+                            fontColor: '#bbb'
+                        }
+                    }]
+                }
+            });
+        }
+
+
+        // --- 7. INICIALIZAÇÃO ---
+        window.onload = carregarTudo;
+
+    </script>
+</body>
+</html>

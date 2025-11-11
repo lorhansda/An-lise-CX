@@ -86,6 +86,16 @@
         }
         .tooltip:hover { background: #777; color: #1a1a1a; }
         .loading { text-align: center; font-size: 1.2em; color: #777; padding: 40px 0; }
+        .status-banner {
+            display: none; padding: 16px 20px; border-radius: 6px; margin-bottom: 20px;
+            border-left: 4px solid transparent; background: rgba(74, 144, 226, 0.12);
+        }
+        .status-banner.info { border-color: #4a90e2; color: #d0e2ff; }
+        .status-banner.success { border-color: #417505; background: rgba(65, 117, 5, 0.15); color: #d8f0c8; }
+        .status-banner.warning { border-color: #f5a623; background: rgba(245, 166, 35, 0.18); color: #ffe2b5; }
+        .status-banner.error { border-color: #d0021b; background: rgba(208, 2, 27, 0.15); color: #ffd4d4; }
+        .status-banner.show { display: block; }
+        .status-banner strong { display: block; margin-bottom: 6px; }
     </style>
 </head>
 <body>
@@ -94,6 +104,8 @@
         <header>
             <h1>Dashboard Estratégico CX (V10.3)</h1>
         </header>
+
+        <div id="status-banner" class="status-banner"></div>
 
             <div class="view-controls" id="controles-principais">
             <div>
@@ -176,7 +188,14 @@
         // --- CONFIGURAÇÃO ---
         const WORKER_URL = "https://super-union-6352.sensedata-dash.workers.dev";
         const VALOR_CONFORME = "🟢 Conforme"; 
-        
+        const FETCH_TIMEOUT_MS = 12000;
+        const MAX_FETCH_RETRIES = 3;
+        const RETRY_DELAY_BASE_MS = 700;
+        const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 horas
+        const STORAGE_KEYS = {
+            abas: "cx-dashboard-cache-abas",
+            auditsPrefix: "cx-dashboard-cache-audits"
+        };
         const PILARES_MAP = [
             { id_nome: "pilar1_nome", id_conf: "pilar1_conf", id_obs: "pilar1_obs", id_leg: "legenda1" },
             { id_nome: "pilar2_nome", id_conf: "pilar2_conf", id_obs: "pilar2_obs", id_leg: "legenda2" },
@@ -185,6 +204,7 @@
             { id_nome: "pilar5_nome", id_conf: "pilar5_conf", id_obs: "pilar5_obs", id_leg: "legenda5" },
             { id_nome: "pilar6_nome", id_conf: "pilar6_conf", id_obs: "pilar6_obs", id_leg: "legenda6" }
         ];
+        const diagnostics = { warnings: [] };
         // --- FIM DA CONFIGURAÇÃO ---
 
         let state = {
@@ -196,47 +216,175 @@
         let chartInstances = {};
         const $ = (id) => document.getElementById(id);
 
+        const statusBanner = (() => {
+            const banner = () => $("status-banner");
+            function resetClass(el) {
+                el.className = "status-banner";
+            }
+            return {
+                clear() {
+                    const el = banner();
+                    if (!el) return;
+                    resetClass(el);
+                    el.innerHTML = "";
+                },
+                show(type, message, details) {
+                    const el = banner();
+                    if (!el) return;
+                    resetClass(el);
+                    el.classList.add(type, "show");
+                    const detailHtml = details ? `<div>${details}</div>` : "";
+                    el.innerHTML = `<strong>${message}</strong>${detailHtml}`;
+                },
+                append(type, message) {
+                    const el = banner();
+                    if (!el) return;
+                    el.classList.add(type, "show");
+                    const line = document.createElement("div");
+                    line.textContent = message;
+                    el.appendChild(line);
+                }
+            };
+        })();
+
+        const storage = {
+            get(key) {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return null;
+                    const parsed = JSON.parse(raw);
+                    if (!parsed || typeof parsed !== "object") return null;
+                    if (parsed.timestamp && Date.now() - parsed.timestamp > CACHE_TTL_MS) {
+                        localStorage.removeItem(key);
+                        return null;
+                    }
+                    return parsed.value ?? null;
+                } catch (error) {
+                    console.warn("[Dashboard] Falha ao ler cache", error);
+                    return null;
+                }
+            },
+            set(key, value) {
+                try {
+                    const payload = JSON.stringify({ timestamp: Date.now(), value });
+                    localStorage.setItem(key, payload);
+                } catch (error) {
+                    console.warn("[Dashboard] Falha ao salvar cache", error);
+                }
+            }
+        };
+
         // --- 1. CARREGAMENTO GLOBAL (AO INICIAR) ---
         async function carregarTudo() {
-            $("loading").innerText = "Carregando dados de todas as auditorias...";
+            statusBanner.clear();
+            diagnostics.warnings = [];
+            const loadingEl = $("loading");
+            if (loadingEl) {
+                loadingEl.style.display = "block";
+                loadingEl.innerText = "Carregando dados de todas as auditorias...";
+            }
             
             try {
-                const cacheBust = `?cb=${new Date().getTime()}`;
+                const cacheBust = `?cb=${Date.now()}`;
 
-                const abasResponse = await fetch(`${WORKER_URL}/get-abas${cacheBust}`);
-                if (!abasResponse.ok) throw new Error("Falha ao carregar lista de abas");
-                const abasGrupos = await abasResponse.json(); 
+                const abasResult = await fetchJsonWithRetry(`${WORKER_URL}/get-abas${cacheBust}`, {
+                    cacheKey: STORAGE_KEYS.abas,
+                    transform: sanitizeAbas
+                });
 
+                const abasGrupos = abasResult.data;
+                if (!Array.isArray(abasGrupos) || abasGrupos.length === 0) {
+                    throw new Error("Nenhuma aba retornada pelo serviço.");
+                }
+
+                state.mapaGrupos = new Map();
                 abasGrupos.forEach(item => {
-                    const grupoNormalizado = normalizeText(item.produto); 
-                    if (!state.mapaGrupos.has(grupoNormalizado)) {
-                        state.mapaGrupos.set(grupoNormalizado, []);
+                    if (!state.mapaGrupos.has(item.grupoNormalizado)) {
+                        state.mapaGrupos.set(item.grupoNormalizado, []);
                     }
-                    state.mapaGrupos.get(grupoNormalizado).push(item.aba);
+                    state.mapaGrupos.get(item.grupoNormalizado).push(item.aba);
+                });
+                state.mapaGrupos.forEach((abas, key, map) => {
+                    const unicos = Array.from(new Set(abas)).sort();
+                    map.set(key, unicos);
                 });
 
-                const fetchPromises = abasGrupos.map(item => 
-                    fetch(`${WORKER_URL}/get-audits?produto=${item.produto}&aba=${item.aba}&cb=${new Date().getTime()}`)
-                        .then(res => res.json())
+                const uniqueCombos = deduplicateAbas(abasGrupos);
+
+                const auditoriasResultados = await Promise.allSettled(
+                    uniqueCombos.map(item => carregarAuditoriasPorCombo(item))
                 );
-                
-                const resultadosPorAba = await Promise.all(fetchPromises);
-                state.todasAuditorias = resultadosPorAba.flat();
-                
-                state.todasAuditorias.forEach(audit => {
-                    audit.produto = normalizeText(audit.produto); 
-                    audit.produto_interno = normalizeText(audit.produto_interno); 
+
+                const todasAuditorias = [];
+                const cacheMensagens = [];
+                const falhasMensagens = [];
+
+                auditoriasResultados.forEach((resultado, index) => {
+                    const contexto = uniqueCombos[index];
+                    if (resultado.status === "fulfilled") {
+                        const payload = resultado.value;
+                        todasAuditorias.push(...payload.data);
+                        if (payload.source === "cache") {
+                            cacheMensagens.push(`Dados recuperados do cache: ${contexto.aba} (${contexto.produtoOriginal})`);
+                        }
+                        if (payload.warnings?.length) {
+                            payload.warnings.forEach(msg => reportWarning(msg));
+                        }
+                    } else {
+                        const motivo = resultado.reason?.message || "Motivo não informado";
+                        falhasMensagens.push(`${contexto.aba} (${contexto.produtoOriginal}) - ${motivo}`);
+                        reportWarning(`Falha ao carregar auditorias para ${contexto.aba} (${contexto.produtoOriginal})`, motivo);
+                    }
                 });
+
+                if (!todasAuditorias.length) {
+                    throw new Error("Não foi possível carregar nenhuma auditoria (rede e cache indisponíveis).");
+                }
+
+                const auditoriasDeduplicadas = deduplicateAuditorias(todasAuditorias);
+                state.todasAuditorias = auditoriasDeduplicadas;
                 
                 populateGrupoFilter();
                 renderizarDashboard();
                 
-                $("loading").style.display = "none";
+                if (loadingEl) {
+                    loadingEl.style.display = "none";
+                }
                 $("view-global").style.display = "block"; 
+
+                let bannerTipo = "success";
+                let bannerTitulo = "Dados atualizados com sucesso.";
+                let bannerDetalhe = "";
+
+                if (falhasMensagens.length) {
+                    bannerTipo = "warning";
+                    bannerTitulo = "Dados carregados parcialmente.";
+                    bannerDetalhe = `${falhasMensagens.length} fonte(s) não responderam.`;
+                } else if (cacheMensagens.length || abasResult.source === "cache") {
+                    bannerTipo = "warning";
+                    bannerTitulo = "Dados carregados a partir do cache.";
+                    bannerDetalhe = "Verifique conectividade com o Worker para atualizar as informações.";
+                }
+
+                statusBanner.show(bannerTipo, bannerTitulo, bannerDetalhe);
+
+                if (abasResult.source === "cache") {
+                    statusBanner.append("warning", "Lista de abas servida do cache local.");
+                }
+                cacheMensagens.forEach(msg => statusBanner.append("warning", msg));
+                falhasMensagens.forEach(msg => statusBanner.append(bannerTipo === "error" ? "error" : "warning", `Falha: ${msg}`));
+
+                if (diagnostics.warnings.length) {
+                    const uniqueWarnings = Array.from(new Set(diagnostics.warnings));
+                    uniqueWarnings.forEach(msg => statusBanner.append("warning", msg));
+                }
 
             } catch (error) {
                 console.error(error);
-                $("loading").innerText = "Erro fatal ao carregar dados globais. Verifique o Worker.";
+                if (loadingEl) {
+                    loadingEl.innerText = "Erro fatal ao carregar dados globais. Verifique o Worker.";
+                }
+                statusBanner.show("error", "Não foi possível carregar o dashboard.", error.message || "Erro desconhecido.");
             }
         }
 
@@ -576,20 +724,254 @@
 
         // --- 6. FUNÇÕES AUXILIARES E NOVOS GRÁFICOS ---
 
+        async function carregarAuditoriasPorCombo(combo) {
+            const url = `${WORKER_URL}/get-audits?produto=${encodeURIComponent(combo.produtoOriginal)}&aba=${encodeURIComponent(combo.abaOriginal)}&cb=${Date.now()}`;
+            const cacheKey = `${STORAGE_KEYS.auditsPrefix}:${encodeURIComponent(combo.produtoOriginal.toLowerCase())}:${encodeURIComponent(combo.abaOriginal.toLowerCase())}`;
+            return fetchJsonWithRetry(url, {
+                cacheKey,
+                transform: data => sanitizeAudits(data, combo)
+            });
+        }
+
+        async function fetchJsonWithRetry(url, { cacheKey, transform } = {}) {
+            const warnings = [];
+            let attempt = 0;
+            let lastError = null;
+
+            while (attempt < MAX_FETCH_RETRIES) {
+                attempt++;
+                try {
+                    const response = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const rawData = await response.json();
+                    const data = transform ? transform(rawData) : rawData;
+                    if (cacheKey) {
+                        storage.set(cacheKey, data);
+                    }
+                    if (attempt > 1) {
+                        warnings.push(`Dados atualizados após ${attempt} tentativas.`);
+                    }
+                    return { data, source: "network", attempts: attempt, warnings };
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < MAX_FETCH_RETRIES) {
+                        await wait(RETRY_DELAY_BASE_MS * Math.pow(2, attempt - 1));
+                    }
+                }
+            }
+
+            if (cacheKey) {
+                const cached = storage.get(cacheKey);
+                if (cached) {
+                    warnings.push(`Falha ao atualizar (${lastError?.message || "erro desconhecido"}). Utilizando dados do cache.`);
+                    return { data: cached, source: "cache", attempts: attempt, warnings };
+                }
+            }
+
+            throw lastError || new Error("Falha desconhecida ao buscar dados.");
+        }
+
+        async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeout);
+            try {
+                return await fetch(url, { ...options, signal: controller.signal });
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        function wait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function sanitizeAbas(data) {
+            if (!Array.isArray(data)) {
+                reportWarning("Formato inesperado na resposta de abas.", typeof data);
+                return [];
+            }
+            return data.reduce((lista, item, index) => {
+                if (!item || typeof item !== "object") {
+                    reportWarning("Item de aba ignorado por formato inválido.", `posição ${index}`);
+                    return lista;
+                }
+                const produtoOriginal = sanitizeString(item.produto);
+                const abaOriginal = sanitizeString(item.aba);
+                if (!produtoOriginal || !abaOriginal) {
+                    reportWarning("Item de aba ignorado por campos vazios.", JSON.stringify(item));
+                    return lista;
+                }
+                lista.push({
+                    produtoOriginal,
+                    grupoNormalizado: normalizeText(produtoOriginal),
+                    produto: normalizeText(produtoOriginal),
+                    abaOriginal,
+                    aba: abaOriginal
+                });
+                return lista;
+            }, []);
+        }
+
+        function sanitizeAudits(data, contexto) {
+            if (!Array.isArray(data)) {
+                reportWarning(`Formato inesperado de auditorias (${contexto.aba}/${contexto.produtoOriginal}).`, typeof data);
+                return [];
+            }
+
+            return data.reduce((lista, item, index) => {
+                if (!item || typeof item !== "object") {
+                    reportWarning("Auditoria ignorada por formato inválido.", `posição ${index}`);
+                    return lista;
+                }
+
+                const audit = { ...item };
+                audit.id = sanitizeAuditId(item, contexto, index);
+                if (!audit.id) {
+                    reportWarning("Auditoria descartada por ausência de identificador.", `${contexto.aba} - posição ${index}`);
+                    return lista;
+                }
+
+                audit.produto = normalizeText(sanitizeString(item.produto) || contexto.produtoOriginal);
+                audit.produto_interno = normalizeText(sanitizeString(item.produto_interno));
+                audit.aba = sanitizeString(item.aba) || contexto.aba;
+                audit.tecnico = sanitizeString(item.tecnico);
+                audit.responsavel = sanitizeString(item.responsavel);
+                audit.duracao = sanitizeString(item.duracao);
+                audit.transferencia = sanitizeString(item.transferencia);
+                audit.contato = sanitizeString(item.contato);
+                audit.data_auditoria = sanitizeString(item.data_auditoria);
+                audit.data_hora = sanitizeString(item.data_hora);
+                audit.identificacao = sanitizeString(item.identificacao);
+                audit.motivo = sanitizeString(item.motivo);
+                audit.cliente_codigo = sanitizeString(item.cliente_codigo);
+
+                PILARES_MAP.forEach(pilar => {
+                    audit[pilar.id_nome] = sanitizeString(item[pilar.id_nome]);
+                    audit[pilar.id_conf] = sanitizeString(item[pilar.id_conf]);
+                    audit[pilar.id_obs] = sanitizeString(item[pilar.id_obs]);
+                    audit[pilar.id_leg] = sanitizeString(item[pilar.id_leg]);
+                });
+
+                lista.push(audit);
+                return lista;
+            }, []);
+        }
+
+        function sanitizeAuditId(item, contexto, index) {
+            const candidatos = [
+                item.id,
+                item.audit_id,
+                item.identificacao,
+                item.call_id,
+                `${contexto.produtoOriginal}-${contexto.abaOriginal}-${item.data_auditoria || ""}-${index}`
+            ];
+            for (const candidato of candidatos) {
+                const valor = sanitizeString(candidato);
+                if (valor) return valor;
+            }
+            return null;
+        }
+
+        function deduplicateAbas(lista) {
+            const mapa = new Map();
+            lista.forEach(item => {
+                const chave = `${item.produtoOriginal}::${item.abaOriginal}`;
+                if (!mapa.has(chave)) {
+                    mapa.set(chave, item);
+                }
+            });
+            return Array.from(mapa.values());
+        }
+
+        function deduplicateAuditorias(lista) {
+            const mapa = new Map();
+            lista.forEach(audit => {
+                const chave = `${audit.id}::${audit.aba || ""}::${audit.produto || ""}`;
+                if (!mapa.has(chave)) {
+                    mapa.set(chave, audit);
+                    return;
+                }
+                const atual = mapa.get(chave);
+                const dataAtual = parseAuditDate(atual.data_auditoria);
+                const dataNova = parseAuditDate(audit.data_auditoria);
+                if (dataNova && (!dataAtual || dataNova > dataAtual)) {
+                    mapa.set(chave, audit);
+                }
+            });
+            return Array.from(mapa.values());
+        }
+
+        function parseAuditDate(valor) {
+            const str = sanitizeString(valor);
+            if (!str) return null;
+            if (str.includes("/")) {
+                const partes = str.split(/[\/ ]/);
+                if (partes.length >= 3) {
+                    const [dia, mes, ano] = partes;
+                    const iso = `${ano.padStart(4, "0")}-${mes.padStart(2, "0")}-${dia.padStart(2, "0")}T00:00:00`;
+                    const date = new Date(iso);
+                    if (!isNaN(date.getTime())) return date;
+                }
+            }
+            const date = new Date(str);
+            return isNaN(date.getTime()) ? null : date;
+        }
+
+        function sanitizeString(value) {
+            if (value === null || value === undefined) return null;
+            const str = `${value}`.trim();
+            return str.length ? str : null;
+        }
+
+        function reportWarning(message, detail) {
+            const texto = detail ? `${message} (${detail})` : message;
+            diagnostics.warnings.push(texto);
+            console.warn("[Dashboard]", message, detail || "");
+        }
+
         // --- 6.1 FUNÇÕES AUXILIARES (EXISTENTES) ---
         function normalizeText(str) {
             if (!str || typeof str !== 'string' || str.trim() === '') return null;
             return str.trim().toLowerCase().replace(/\b\w/g, char => char.toUpperCase());
         }
 
-        function parseDuration(durationStr) {
-            if (!durationStr || typeof durationStr !== 'string') return 0;
-           const match = durationStr.match(/(\d+):(\d+)/);
-            if (match && match[1] && match[2]) {
-                const minutes = parseInt(match[1], 10);
-                const seconds = parseInt(match[2], 10);
-                return (minutes * 60) + seconds;
+        function parseDuration(valor) {
+            if (valor === null || valor === undefined) return 0;
+            if (typeof valor === "number" && !isNaN(valor)) return valor;
+
+            const str = sanitizeString(valor);
+            if (!str) return 0;
+
+            if (/^\d+$/.test(str)) {
+                return parseInt(str, 10);
             }
+
+            if (str.includes(":")) {
+                const partes = str.split(":").map(parte => parseInt(parte, 10));
+                if (partes.every(num => !isNaN(num))) {
+                    if (partes.length === 2) {
+                        return partes[0] * 60 + partes[1];
+                    }
+                    if (partes.length === 3) {
+                        return partes[0] * 3600 + partes[1] * 60 + partes[2];
+                    }
+                    if (partes.length === 4) {
+                        return partes[0] * 86400 + partes[1] * 3600 + partes[2] * 60 + partes[3];
+                    }
+                }
+            }
+
+            const texto = str.toLowerCase();
+            const match = texto.match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?/);
+            if (match && (match[1] || match[2] || match[3])) {
+                const horas = parseInt(match[1] || "0", 10);
+                const minutos = parseInt(match[2] || "0", 10);
+                const segundos = parseInt(match[3] || "0", 10);
+                return horas * 3600 + minutos * 60 + segundos;
+            }
+
             return 0;
         }
 
